@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
 import torchvision.models as models
 
+from fastprogress.fastprogress import progress_bar
+
 import copy
 
 device = torch.device('cuda') # make use of GPU
@@ -149,7 +151,7 @@ def get_style_model_and_losses(cnn, norm_mean, norm_std, style_img, content_img,
         elif isinstance(layer, nn.BatchNorm2d):
             name = f'bn_{i}'
         else:
-            raise RuntimeError(f"input model has unrecognized layer                                {layer.__class__.__name__}")
+            raise RuntimeError(f"input model has unrecognized layer {layer.__class__.__name__}")
         model.add_module(name, layer) # add the layer to our model
         
         if name in content_layers:
@@ -186,13 +188,13 @@ def get_input_optimizer(input_img):
     # We will use the L-BFGS algo which is in line with the algo 
     # used by the original author of neural style transfer
     # specify that the input image is the set of values which should be optimized
-    optimizer = optim.LBFGS([input_img]) 
+    optimizer = optim.Adam([input_img]) 
     return optimizer
 
 
 def run_style_transfer(cnn, norm_mean, norm_std, content_img, style_img, input_img, 
                         content_layers, style_layers, num_steps=300, 
-                      style_over_cont_ratio=1e6, iters_to_show=100):
+                      content_weight=1, style_weight=1e6, iters_to_show=100):
     """Run the style transfer"""
     print('building style transfer model...')
     
@@ -206,6 +208,7 @@ def run_style_transfer(cnn, norm_mean, norm_std, content_img, style_img, input_i
     optimizer = get_input_optimizer(input_img)
     
     print('optimizing...')
+    
     run = [0]
     while run[0] <= num_steps:
         
@@ -223,9 +226,7 @@ def run_style_transfer(cnn, norm_mean, norm_std, content_img, style_img, input_i
                 style_score += sl.loss
             for cl in content_losses:
                 content_score += cl.loss
-            
-            content_weight = 1
-            style_weight = content_weight * style_over_cont_ratio
+ 
             style_score *= style_weight
             content_score *= content_weight
             loss = style_score + content_score
@@ -234,11 +235,10 @@ def run_style_transfer(cnn, norm_mean, norm_std, content_img, style_img, input_i
             run[0] += 1
             if run[0] % iters_to_show == 0: 
                 plt.figure()
-                imshow(input_img, title=f'run: {run}, Total Loss: {loss.item():.4f},                        Style Loss: {style_score.item():.4f},                        Content Loss: {content_score.item():.4f}')
+                imshow(input_img, title=f'run: {run}, Total Loss: {loss.item():.4f}, Style Loss: {style_score.item():.4f}, Content Loss:{content_score.item():.4f}')
             return loss
         
         optimizer.step(closure)
-    
     # once the optimization steps are done perform the last correction
     with torch.no_grad():
         input_img.clamp_(0, 1)
