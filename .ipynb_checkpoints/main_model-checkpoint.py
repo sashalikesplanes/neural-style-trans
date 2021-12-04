@@ -24,6 +24,8 @@ import torchvision.models as models
 
 from fastprogress.fastprogress import progress_bar
 
+from pathlib import Path
+
 import copy
 
 device = torch.device('cuda') # make use of GPU
@@ -53,10 +55,14 @@ def image_loader(image_name, img_size):
     return image.to(device, torch.float)
 
 
-def imshow(tensor, title=None):
+def imshow(tensor, run_n, title=None):
     image = tensor.cpu().clone() # clone to not modify the original image
     image = image[0]
     image = unloader(image)
+    path = Path.cwd()
+    fp = Path(path/'out'/f'run_{run_n}.jpg')
+    image.save(fp, 'JPEG')
+
     plt.imshow(image)
     if title:
         plt.title(title)
@@ -77,7 +83,7 @@ class ContentLoss(nn.Module):
         self.target = target.detach()
         
     def forward(self, input):
-        self.loss = F.mse_loss(input, self.target)
+        self.loss = F.l1_loss(input, self.target)
         return input
 
 
@@ -101,7 +107,7 @@ class StyleLoss(nn.Module):
         
     def forward(self, input):
         G_in = gram_matrix(input)
-        self.loss = F.mse_loss(G_in, self.target)
+        self.loss = F.l1_loss(G_in, self.target)
         return input
 
 
@@ -235,7 +241,7 @@ def run_style_transfer(cnn, norm_mean, norm_std, content_img, style_img, input_i
             run[0] += 1
             if run[0] % iters_to_show == 0: 
                 plt.figure()
-                imshow(input_img, title=f'run: {run}, Total Loss: {loss.item():.4f}, Style Loss: {style_score.item():.4f}, Content Loss:{content_score.item():.4f}')
+                imshow(input_img, run[0], title=f'run_{run}, Total Loss: {loss.item():.4f}, Style Loss: {style_score.item():.4f}, Content Loss:{content_score.item():.4f}')
             return loss
         
         optimizer.step(closure)
@@ -244,3 +250,55 @@ def run_style_transfer(cnn, norm_mean, norm_std, content_img, style_img, input_i
         input_img.clamp_(0, 1)
     
     return input_img
+
+def run_style_transfer_with_display(cnn, norm_mean, norm_std, content_img, style_img, input_img, 
+                        content_layers, style_layers, img_disp, num_steps=300, 
+                      content_weight=1, style_weight=1e6, iters_to_show=100):
+    """Run the style transfer"""
+    print('building style transfer model...')
+    
+    model, style_losses, content_losses = get_style_model_and_losses(
+        cnn, norm_mean, norm_std, style_img, content_img, content_layers, style_layers)
+    
+    # we want to optimize the input image and leave the cnn paramets unchanges
+    input_img.requires_grad_(True)
+    model.requires_grad_(False)
+    
+    optimizer = get_input_optimizer(input_img)
+    
+    print('optimizing...')
+    
+    run = [0]
+    while run[0] <= num_steps:
+        
+        def closure():
+            # correct input image to contain numbers only between 0 and 1
+            with torch.no_grad(): # do not save this step for optimizer
+                input_img.clamp_(0, 1)
+                
+            optimizer.zero_grad() # reset gradient after the last run through
+            model(input_img) # run the previosly updated image through model
+            style_score = 0
+            content_score = 0
+            
+            for sl in style_losses:
+                style_score += sl.loss
+            for cl in content_losses:
+                content_score += cl.loss
+ 
+            style_score *= style_weight
+            content_score *= content_weight
+            loss = style_score + content_score
+            loss.backward()
+            
+            run[0] += 1
+            if run[0] % iters_to_show == 0: 
+                img_disp(input_img, run)
+            return loss
+        
+        optimizer.step(closure)
+    # once the optimization steps are done perform the last correction
+    with torch.no_grad():
+        input_img.clamp_(0, 1)
+    
+    #return input_img
